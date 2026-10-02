@@ -1,5 +1,6 @@
 import httpx
 import pytest
+
 from local_agent.ollama import OllamaClient
 
 

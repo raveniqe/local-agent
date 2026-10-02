@@ -1,6 +1,7 @@
 import pytest
-from local_agent.models import WorkerRequest, WorkerResult
 from pydantic import ValidationError
+
+from local_agent.models import WorkerRequest, WorkerResult
 
 
 def test_successful_worker_result():

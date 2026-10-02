@@ -3,7 +3,8 @@
     "*": true,
     "plaintext": false,
     "markdown": false,
-    "scminput": false
+    "scminput": false,
+    "yaml": false
   },
   "github.copilot.nextEditSuggestions.enabled": false,
   "[python]": {

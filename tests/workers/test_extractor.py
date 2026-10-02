@@ -1,7 +1,8 @@
+from pydantic import ValidationError
+
 from local_agent.models import ExtractionResult, WorkerRequest
 from local_agent.validation import OutputIssueKind, normalize_validation_error
 from local_agent.workers.extractor import ExtractorWorker
-from pydantic import ValidationError
 
 
 class FakeOllamaClient:
@@ -211,13 +212,12 @@ def test_extractor_worker_returns_last_validation_error_after_failed_retry():
     assert client.number_of_chat_calls == 2
 
 
-def test_proper_second_response(): 
+def test_proper_second_response():
     client = FakeRepairPromptClient()
     worker = ExtractorWorker(client)
 
     request = WorkerRequest(
-        task="Extract the order number",
-        input_text="Order ABC-123 was created"
+        task="Extract the order number", input_text="Order ABC-123 was created"
     )
 
     _ = worker.run(request)

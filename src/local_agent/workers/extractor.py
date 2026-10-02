@@ -32,22 +32,18 @@ class ExtractorWorker:
             try:
                 extraction = ExtractionResult.model_validate_json(response_text)
                 return WorkerResult(
-                    success=True,
-                    data=extraction.model_dump(),
-                    error=None
+                    success=True, data=extraction.model_dump(), error=None
                 )
             except ValidationError as exc:
                 issue = normalize_validation_error(exc)
 
                 if attempt == 1:
                     return WorkerResult(
-                        success=False,
-                        data=None,
-                        error=issue.message_for_model
+                        success=False, data=None, error=issue.message_for_model
                     )
 
                 prompt = f"""
-                Task: 
+                Task:
                 {request.task}
 
                 Input:
@@ -64,4 +60,3 @@ class ExtractorWorker:
                 """.strip()
 
         raise AssertionError("Unreachable")
-                    
