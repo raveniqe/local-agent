@@ -14,3 +14,5 @@ COPY README.md ./
 COPY src ./src
 
 RUN uv sync --locked --no-dev
+
+CMD ["uvicorn", "local_agent.api:app", "--host", "0.0.0.0", "--port", "8000"]
