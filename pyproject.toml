@@ -4,7 +4,11 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = ["httpx>=0.28.1", "pydantic>=2.13.5"]
+dependencies = [
+    "fastapi[standard]>=0.142.2",
+    "httpx>=0.28.1",
+    "pydantic>=2.13.5",
+]
 
 [project.scripts]
 local-agent = "local_agent:main"
@@ -14,7 +18,12 @@ requires = ["uv_build>=0.12.19,<0.13.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
-dev = ["black>=26.5.1", "pre-commit>=4.6.2", "pytest>=9.1.1"]
+dev = [
+    "black>=26.5.1",
+    "httpx2>=2.13.1",
+    "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
+]
 
 [tool.black]
 target-version = ["py313"]
