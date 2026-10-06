@@ -37,6 +37,7 @@ app = FastAPI()
 
 
 def _get_extractor_worker() -> ExtractorWorker:
+    """Build the extractor worker used to handle extraction requests."""
     client = OllamaClient(base_url=OLLAMA_BASE_URL)
 
     worker = ExtractorWorker(client)
@@ -61,7 +62,7 @@ def extract(
     request: WorkerRequest,
     worker: Annotated[ExtractorWorker, Depends(_get_extractor_worker)],
 ):
-    """Return the validated response from worker"""
+    """Return the worker result for a validated extraction request."""
     result = worker.run(request)
 
     return result

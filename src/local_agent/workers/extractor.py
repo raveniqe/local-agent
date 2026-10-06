@@ -6,6 +6,8 @@ from local_agent.validation import normalize_validation_error
 
 
 class ExtractorWorker:
+    """Extract a single structured value from text using a chat model."""
+
     def __init__(
         self,
         client: ChatClient,
@@ -15,6 +17,7 @@ class ExtractorWorker:
         self.model = model
 
     def run(self, request: WorkerRequest) -> WorkerResult:
+        """Run extraction and retry once when the model output is invalid."""
         prompt = f"""
         Task:
         {request.task}

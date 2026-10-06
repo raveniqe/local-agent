@@ -5,6 +5,8 @@ from pydantic import ValidationError
 
 
 class OutputIssueKind(Enum):
+    """Categories of validation failures in model output."""
+
     INVALID_JSON = "invalid_json"
     MISSING_FIELD = "missing_field"
     UNKNOWN = "unknown"
@@ -12,6 +14,8 @@ class OutputIssueKind(Enum):
 
 @dataclass(frozen=True)
 class OutputValidationIssue:
+    """Normalized validation failure that can be sent back to a model."""
+
     kind: OutputIssueKind
     message_for_model: str
 
@@ -19,6 +23,7 @@ class OutputValidationIssue:
 def normalize_validation_error(
     validation_error: ValidationError,
 ) -> OutputValidationIssue:
+    """Convert a Pydantic validation error into a model-facing repair message."""
     errors = validation_error.errors()
     first_error = errors[0]
 

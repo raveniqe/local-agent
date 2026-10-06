@@ -7,4 +7,6 @@ class ChatClient(Protocol):
     with a chat model.
     """
 
-    def chat(self, model: str, prompt: str) -> str: ...
+    def chat(self, model: str, prompt: str) -> str:
+        """Return the model response for the supplied prompt."""
+        ...
