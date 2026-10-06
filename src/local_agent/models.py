@@ -1,6 +1,6 @@
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 
 class WorkerRequest(BaseModel):
@@ -11,8 +11,8 @@ class WorkerRequest(BaseModel):
     should process.
     """
 
-    task: str = Field(min_length=1)
-    input_text: str = Field(min_length=1)
+    task: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    input_text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class WorkerResult(BaseModel):

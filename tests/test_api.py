@@ -116,3 +116,68 @@ def test_extract_returns_failed_result_when_model_returns_invalid_json(
         "data": None,
         "error": "Previous response was not in valid JSON.",
     }
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"task": "", "input_text": "Customer: Alice"},
+        {"task": "Extract name", "input_text": ""},
+    ],
+)
+def test_extract_rejects_empty_fields(
+    payload,
+    prepare_successful_environment,
+):
+    response = client.post("/extract", json=payload)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"task": "   ", "input_text": "Customer: Alice"},
+        {"task": "Extract name", "input_text": "   "},
+    ],
+)
+def test_extract_rejects_whitespace_only_fields(
+    payload,
+    prepare_successful_environment,
+):
+    response = client.post("/extract", json=payload)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"task": "Extract name"},
+        {"input_text": "Customer: Alice"},
+    ],
+)
+def test_extract_rejects_missing_required_fields(
+    payload,
+    prepare_successful_environment,
+):
+    response = client.post("/extract", json=payload)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"task": 123, "input_text": "Customer: Alice"},
+        {"task": "Extract name", "input_text": ["Customer: Alice"]},
+    ],
+)
+def test_extract_rejects_non_string_fields(
+    payload,
+    prepare_successful_environment,
+):
+    response = client.post("/extract", json=payload)
+
+    assert response.status_code == 422
