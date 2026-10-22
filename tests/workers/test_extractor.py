@@ -1,8 +1,18 @@
 from pydantic import ValidationError
+from pydantic_ai import (
+    ModelMessage,
+    ModelResponse,
+    RetryPromptPart,
+    ToolCallPart,
+    UnexpectedModelBehavior,
+    UserPromptPart,
+)
+from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.test import TestModel
 
 from local_agent.models import ExtractionResult, WorkerRequest
 from local_agent.validation import OutputIssueKind, normalize_validation_error
-from local_agent.workers.extractor import ExtractorWorker
+from local_agent.workers.extractor import ExtractorWorker, PydanticExtractorWorker
 
 
 class FakeOllamaClient:
@@ -212,7 +222,7 @@ def test_extractor_worker_returns_last_validation_error_after_failed_retry():
     assert client.number_of_chat_calls == 2
 
 
-def test_proper_second_response():
+def test_extractor_worker_builds_repair_prompt_after_invalid_output():
     client = FakeRepairPromptClient()
     worker = ExtractorWorker(client)
 
@@ -230,3 +240,174 @@ def test_proper_second_response():
     assert "Order ABC-123 was created" in repair_prompt
     assert "Previous response was not in valid JSON" in repair_prompt
     assert '{"value": "<extracted value>"}' in repair_prompt
+
+
+def test_pydantic_extractor_returns_worker_result():
+    worker = PydanticExtractorWorker()
+
+    test_model = TestModel(custom_output_args={"value": "ABC-123"})
+
+    with worker.agent.override(model=test_model):
+        request = WorkerRequest(
+            task="Extract the order number",
+            input_text="Order ABC-123 was created",
+        )
+
+        result = worker.run(request=request)
+
+        assert result.data == {"value": "ABC-123"}
+        assert result.success is True
+        assert result.error is None
+
+
+def test_pydantic_extractor_returns_failure_on_unexpected_model_behavior(monkeypatch):
+
+    def fake_run_sync(promt: str):
+        raise UnexpectedModelBehavior(message="Simulated failure")
+
+    worker = PydanticExtractorWorker()
+
+    monkeypatch.setattr(worker.agent, "run_sync", fake_run_sync)
+
+    request = WorkerRequest(
+        task="Extract the order number",
+        input_text="Order ABC-123 was created",
+    )
+
+    result = worker.run(request=request)
+
+    assert result.data is None
+    assert result.success is False
+    assert result.error == "Simulated failure"
+
+
+def test_pydantic_extractor_retries_invalid_output_and_returns_corrected_result():
+    number_of_calls = 0
+
+    async def agent_reply(
+        messages: list[ModelMessage], agent_info: AgentInfo
+    ) -> ModelResponse:
+        nonlocal number_of_calls
+        has_retry_prompt = False
+
+        number_of_calls += 1
+        for message in messages:
+            for message_part in message.parts:
+                if isinstance(message_part, RetryPromptPart):
+                    has_retry_prompt = True
+
+        if not has_retry_prompt:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name=agent_info.output_tools[0].name, args={"value": 1}
+                    )
+                ]
+            )
+
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name=agent_info.output_tools[0].name, args={"value": "ABC-123"}
+                )
+            ]
+        )
+
+    worker = PydanticExtractorWorker()
+
+    request = WorkerRequest(
+        task="Extract the order number",
+        input_text="Order ABC-123 was created",
+    )
+
+    with worker.agent.override(model=FunctionModel(agent_reply)):
+        result = worker.run(request=request)
+
+        assert number_of_calls == 2
+        assert result.data == {"value": "ABC-123"}
+        assert result.success is True
+        assert result.error is None
+
+
+def test_pydantic_extractor_returns_failure_after_retry_exhaustion():
+    number_of_calls = 0
+
+    async def agent_reply(
+        messages: list[ModelMessage], agent_info: AgentInfo
+    ) -> ModelResponse:
+        nonlocal number_of_calls
+        has_retry_prompt = False
+
+        number_of_calls += 1
+        for message in messages:
+            for message_part in message.parts:
+                if isinstance(message_part, RetryPromptPart):
+                    has_retry_prompt = True
+
+        if not has_retry_prompt:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name=agent_info.output_tools[0].name, args={"value": 1}
+                    )
+                ]
+            )
+
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name=agent_info.output_tools[0].name, args={"value": 1}
+                )
+            ]
+        )
+
+    worker = PydanticExtractorWorker()
+
+    request = WorkerRequest(
+        task="Extract the order number",
+        input_text="Order ABC-123 was created",
+    )
+
+    with worker.agent.override(model=FunctionModel(agent_reply)):
+        result = worker.run(request=request)
+
+        assert number_of_calls == 2
+        assert result.data is None
+        assert result.success is False
+        assert result.error == "Exceeded maximum output retries (1)"
+
+
+def test_pydantic_extractor_passes_task_and_input_to_agent():
+    captured_prompt = []
+
+    async def agent_reply(
+        messages: list[ModelMessage], agent_info: AgentInfo
+    ) -> ModelResponse:
+        for message in messages:
+            for message_part in message.parts:
+                if isinstance(message_part, UserPromptPart):
+                    captured_prompt.append(message_part.content)
+
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name=agent_info.output_tools[0].name, args={"value": "ABC-123"}
+                )
+            ]
+        )
+
+    worker = PydanticExtractorWorker()
+
+    request = WorkerRequest(
+        task="Extract the order number",
+        input_text="Order ABC-123 was created",
+    )
+
+    with worker.agent.override(model=FunctionModel(agent_reply)):
+        result = worker.run(request=request)
+
+        assert len(captured_prompt) == 1
+        assert request.task in captured_prompt[0]
+        assert request.input_text in captured_prompt[0]
+        assert result.success is True
+        assert result.error is None

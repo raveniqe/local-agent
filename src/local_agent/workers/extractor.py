@@ -1,5 +1,10 @@
 from pydantic import ValidationError
+from pydantic_ai.agent import Agent
+from pydantic_ai.exceptions import UnexpectedModelBehavior
+from pydantic_ai.models.ollama import OllamaModel
+from pydantic_ai.providers.ollama import OllamaProvider
 
+from local_agent.config import OLLAMA_BASE_URL
 from local_agent.models import ExtractionResult, WorkerRequest, WorkerResult
 from local_agent.protocols import ChatClient
 from local_agent.validation import normalize_validation_error
@@ -63,3 +68,53 @@ class ExtractorWorker:
                 """.strip()
 
         raise AssertionError("Unreachable")
+
+
+class PydanticExtractorWorker:
+    """Extract a single structured value from text using a chat model."""
+
+    def __init__(
+        self,
+        model: str = "qwen3:1.7b",
+    ) -> None:
+        self.model = OllamaModel(
+            model,
+            provider=OllamaProvider(base_url=f"{OLLAMA_BASE_URL.rstrip('/')}/v1"),
+        )
+
+        instructions = """
+        You are an information extraction agent.
+        Extract exactly one value requested by the user.
+        Use only the provided input text.
+        Do not invent missing information.
+        """.strip()
+
+        self.agent = Agent(
+            self.model,
+            output_type=ExtractionResult,
+            instructions=instructions,
+            retries={"output": 1},
+        )
+
+    def run(self, request: WorkerRequest) -> WorkerResult:
+        prompt = f"""
+        Task:
+        {request.task}
+
+        Input:
+        {request.input_text}
+        """.strip()
+
+        try:
+            extraction = self.agent.run_sync(prompt)
+            return WorkerResult(
+                success=True,
+                data=extraction.output.model_dump(),
+                error=None,
+            )
+        except UnexpectedModelBehavior as exception:
+            return WorkerResult(
+                success=False,
+                data=None,
+                error=exception.message,
+            )
