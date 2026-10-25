@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import get_args, get_type_hints
+from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,7 +9,8 @@ from pydantic_ai.models.test import TestModel
 import local_agent.api as api_module
 from local_agent.api import _get_extractor_worker, app, extract
 from local_agent.config import ExtractorConfig, ExtractorConfigError
-from local_agent.workers.extractor import ExtractorWorker, PydanticExtractorWorker
+from local_agent.models import WorkerResult
+from local_agent.workers.extractor import PydanticExtractorWorker
 
 client = TestClient(app)
 
@@ -35,40 +37,14 @@ def clear_extractor_worker_cache():
         clear_cache()
 
 
-class FakeLLMChatClient:
-    def chat(self, model: str, prompt: str) -> str:
-        return '{"value": "Alice"}'
-
-
-class FailingFakeChatClient:
-    def chat(self, model: str, prompt: str) -> str:
-        return "It isn't valid JSON"
-
-
-def get_fake_extractor_worker():
-    return ExtractorWorker(FakeLLMChatClient())
-
-
-def get_fake_failing_extractor_worker():
-    return ExtractorWorker(FailingFakeChatClient())
-
-
 @pytest.fixture
-def prepare_successful_environment():
-    app.dependency_overrides[_get_extractor_worker] = get_fake_extractor_worker
+def extractor_worker_mock():
+    worker = Mock(spec=PydanticExtractorWorker)
+    app.dependency_overrides[_get_extractor_worker] = lambda: worker
 
-    yield
+    yield worker
 
-    app.dependency_overrides = {}
-
-
-@pytest.fixture
-def prepare_environment_for_failed_extractor():
-    app.dependency_overrides[_get_extractor_worker] = get_fake_failing_extractor_worker
-
-    yield
-
-    app.dependency_overrides = {}
+    app.dependency_overrides.pop(_get_extractor_worker, None)
 
 
 def test_status_returns_ok():
@@ -111,23 +87,6 @@ def test_echo_returns_response():
 
     assert response.status_code == 200
     assert response.json() == {"response": "hello"}
-
-
-def test_extract_returns_successful_request_and_data(prepare_successful_environment):
-    response = client.post(
-        "/extract",
-        json={
-            "task": "Extract the customer name",
-            "input_text": "Customer: Alice",
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "success": True,
-        "data": {"value": "Alice"},
-        "error": None,
-    }
 
 
 def test_extract_integrates_with_intended_pydantic_worker():
@@ -274,20 +233,48 @@ def test_invalid_config_prevents_extractor_worker_creation(monkeypatch):
         _get_extractor_worker()
 
 
-def test_extract_returns_failed_result_when_model_returns_invalid_json(
-    prepare_environment_for_failed_extractor,
-):
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(
+            "Extractor could not produce valid structured output.",
+            id="invalid-output",
+        ),
+        pytest.param("Model provider request failed.", id="provider-failure"),
+    ],
+)
+def test_extract_preserves_controlled_worker_failure(error, extractor_worker_mock):
+    extractor_worker_mock.run.return_value = WorkerResult(
+        success=False,
+        data=None,
+        error=error,
+    )
+
     response = client.post(
         "/extract",
-        json={"task": "Extract the customer name", "input_text": "Customer: Alison"},
+        json={"task": "Extract the customer name", "input_text": "Customer: Alice"},
     )
 
     assert response.status_code == 200
     assert response.json() == {
         "success": False,
         "data": None,
-        "error": "Previous response was not in valid JSON.",
+        "error": error,
     }
+    extractor_worker_mock.run.assert_called_once()
+
+
+def test_extract_does_not_hide_unexpected_worker_exception(extractor_worker_mock):
+    extractor_worker_mock.run.side_effect = RuntimeError("Unexpected worker failure")
+
+    with pytest.raises(RuntimeError, match="Unexpected worker failure"):
+        client.post(
+            "/extract",
+            json={
+                "task": "Extract the customer name",
+                "input_text": "Customer: Alice",
+            },
+        )
 
 
 @pytest.mark.parametrize(
@@ -297,13 +284,11 @@ def test_extract_returns_failed_result_when_model_returns_invalid_json(
         {"task": "Extract name", "input_text": ""},
     ],
 )
-def test_extract_rejects_empty_fields(
-    payload,
-    prepare_successful_environment,
-):
+def test_extract_rejects_empty_fields(payload, extractor_worker_mock):
     response = client.post("/extract", json=payload)
 
     assert response.status_code == 422
+    extractor_worker_mock.run.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -313,13 +298,11 @@ def test_extract_rejects_empty_fields(
         {"task": "Extract name", "input_text": "   "},
     ],
 )
-def test_extract_rejects_whitespace_only_fields(
-    payload,
-    prepare_successful_environment,
-):
+def test_extract_rejects_whitespace_only_fields(payload, extractor_worker_mock):
     response = client.post("/extract", json=payload)
 
     assert response.status_code == 422
+    extractor_worker_mock.run.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -330,13 +313,11 @@ def test_extract_rejects_whitespace_only_fields(
         {"input_text": "Customer: Alice"},
     ],
 )
-def test_extract_rejects_missing_required_fields(
-    payload,
-    prepare_successful_environment,
-):
+def test_extract_rejects_missing_required_fields(payload, extractor_worker_mock):
     response = client.post("/extract", json=payload)
 
     assert response.status_code == 422
+    extractor_worker_mock.run.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -346,10 +327,8 @@ def test_extract_rejects_missing_required_fields(
         {"task": "Extract name", "input_text": ["Customer: Alice"]},
     ],
 )
-def test_extract_rejects_non_string_fields(
-    payload,
-    prepare_successful_environment,
-):
+def test_extract_rejects_non_string_fields(payload, extractor_worker_mock):
     response = client.post("/extract", json=payload)
 
     assert response.status_code == 422
+    extractor_worker_mock.run.assert_not_called()
