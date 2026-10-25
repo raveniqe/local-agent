@@ -1,4 +1,7 @@
+"""Extractor workers for validated structured value extraction."""
+
 from pydantic import ValidationError
+from pydantic_ai import ModelAPIError
 from pydantic_ai.agent import Agent
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.models.ollama import OllamaModel
@@ -18,6 +21,7 @@ class ExtractorWorker:
         client: ChatClient,
         model: str = "qwen3:1.7b",
     ) -> None:
+        """Initialize the legacy extractor with a chat client and model name."""
         self.client = client
         self.model = model
 
@@ -75,28 +79,33 @@ class PydanticExtractorWorker:
 
     def __init__(
         self,
-        model: str = "qwen3:1.7b",
+        *,
+        model: str,
+        instructions: str,
+        output_retries: int,
+        request_timeout_seconds: float,
     ) -> None:
+        """Configure the Pydantic AI extractor from validated settings."""
         self.model = OllamaModel(
             model,
             provider=OllamaProvider(base_url=f"{OLLAMA_BASE_URL.rstrip('/')}/v1"),
         )
-
-        instructions = """
-        You are an information extraction agent.
-        Extract exactly one value requested by the user.
-        Use only the provided input text.
-        Do not invent missing information.
-        """.strip()
+        self.instructions = instructions
+        self.output_retries = output_retries
+        self.request_timeout_seconds = request_timeout_seconds
 
         self.agent = Agent(
             self.model,
             output_type=ExtractionResult,
-            instructions=instructions,
-            retries={"output": 1},
+            instructions=self.instructions,
+            retries={"output": self.output_retries},
+            model_settings={
+                "timeout": self.request_timeout_seconds,
+            },
         )
 
     def run(self, request: WorkerRequest) -> WorkerResult:
+        """Extract a value and normalize expected model and provider failures."""
         prompt = f"""
         Task:
         {request.task}
@@ -112,9 +121,13 @@ class PydanticExtractorWorker:
                 data=extraction.output.model_dump(),
                 error=None,
             )
-        except UnexpectedModelBehavior as exception:
+        except UnexpectedModelBehavior:
             return WorkerResult(
                 success=False,
                 data=None,
-                error=exception.message,
+                error="Extractor could not produce valid structured output.",
+            )
+        except ModelAPIError:
+            return WorkerResult(
+                success=False, data=None, error="Model provider request failed."
             )

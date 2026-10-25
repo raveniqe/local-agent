@@ -1,6 +1,8 @@
-from typing import Annotated, Any
+from typing import Annotated, Any, Self
 
-from pydantic import BaseModel, Field, StringConstraints, model_validator
+from pydantic import BaseModel, StringConstraints, model_validator
+
+NonEmptyString = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class WorkerRequest(BaseModel):
@@ -11,15 +13,15 @@ class WorkerRequest(BaseModel):
     should process.
     """
 
-    task: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-    input_text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    task: NonEmptyString
+    input_text: NonEmptyString
 
 
 class WorkerResult(BaseModel):
     """
     Represents the result returned by a worker.
 
-    A successful result may contain data and must not contain an error.
+    A successful result must contain data and must not contain an error.
     A failed result must contain an error message.
     """
 
@@ -28,16 +30,21 @@ class WorkerResult(BaseModel):
     error: str | None = None
 
     @model_validator(mode="after")
-    def validate_result(self):
+    def validate_result(self) -> Self:
         """
         Validate that the result state is internally consistent.
         """
-        if self.success is True and self.error is not None:
-            raise ValueError("Successful result cannot contain an error")
 
-        if self.success is False and self.error is None:
-            raise ValueError("Failed result must contain an error")
-
+        if self.success:
+            if self.data is None:
+                raise ValueError("Successful result must contain data.")
+            if self.error is not None:
+                raise ValueError("Successful result cannot contain an error.")
+        else:
+            if self.error is None:
+                raise ValueError("Failed result must contain an error.")
+            if self.data is not None:
+                raise ValueError("Failed result cannot contain data.")
         return self
 
 
@@ -46,4 +53,4 @@ class ExtractionResult(BaseModel):
     Represents a structured value extracted by a worker.
     """
 
-    value: str = Field(min_length=1)
+    value: NonEmptyString

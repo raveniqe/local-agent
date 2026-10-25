@@ -1,3 +1,4 @@
+import pytest
 from pydantic import ValidationError
 from pydantic_ai import (
     ModelMessage,
@@ -7,12 +8,28 @@ from pydantic_ai import (
     UnexpectedModelBehavior,
     UserPromptPart,
 )
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 
 from local_agent.models import ExtractionResult, WorkerRequest
 from local_agent.validation import OutputIssueKind, normalize_validation_error
 from local_agent.workers.extractor import ExtractorWorker, PydanticExtractorWorker
+
+INVALID_OUTPUT_ERROR = "Extractor could not produce valid structured output."
+PROVIDER_ERROR = "Model provider request failed."
+
+
+def make_worker(**changed_settings) -> PydanticExtractorWorker:
+    settings = {
+        "model": "qwen3:1.7b",
+        "instructions": "Extract the requested value.",
+        "output_retries": 1,
+        "request_timeout_seconds": 120,
+    }
+    settings.update(changed_settings)
+
+    return PydanticExtractorWorker(**settings)
 
 
 class FakeOllamaClient:
@@ -243,7 +260,7 @@ def test_extractor_worker_builds_repair_prompt_after_invalid_output():
 
 
 def test_pydantic_extractor_returns_worker_result():
-    worker = PydanticExtractorWorker()
+    worker = make_worker()
 
     test_model = TestModel(custom_output_args={"value": "ABC-123"})
 
@@ -265,7 +282,7 @@ def test_pydantic_extractor_returns_failure_on_unexpected_model_behavior(monkeyp
     def fake_run_sync(promt: str):
         raise UnexpectedModelBehavior(message="Simulated failure")
 
-    worker = PydanticExtractorWorker()
+    worker = make_worker()
 
     monkeypatch.setattr(worker.agent, "run_sync", fake_run_sync)
 
@@ -278,7 +295,7 @@ def test_pydantic_extractor_returns_failure_on_unexpected_model_behavior(monkeyp
 
     assert result.data is None
     assert result.success is False
-    assert result.error == "Simulated failure"
+    assert result.error == INVALID_OUTPUT_ERROR
 
 
 def test_pydantic_extractor_retries_invalid_output_and_returns_corrected_result():
@@ -313,7 +330,7 @@ def test_pydantic_extractor_retries_invalid_output_and_returns_corrected_result(
             ]
         )
 
-    worker = PydanticExtractorWorker()
+    worker = make_worker()
 
     request = WorkerRequest(
         task="Extract the order number",
@@ -361,7 +378,7 @@ def test_pydantic_extractor_returns_failure_after_retry_exhaustion():
             ]
         )
 
-    worker = PydanticExtractorWorker()
+    worker = make_worker()
 
     request = WorkerRequest(
         task="Extract the order number",
@@ -374,7 +391,7 @@ def test_pydantic_extractor_returns_failure_after_retry_exhaustion():
         assert number_of_calls == 2
         assert result.data is None
         assert result.success is False
-        assert result.error == "Exceeded maximum output retries (1)"
+        assert result.error == INVALID_OUTPUT_ERROR
 
 
 def test_pydantic_extractor_passes_task_and_input_to_agent():
@@ -396,7 +413,7 @@ def test_pydantic_extractor_passes_task_and_input_to_agent():
             ]
         )
 
-    worker = PydanticExtractorWorker()
+    worker = make_worker()
 
     request = WorkerRequest(
         task="Extract the order number",
@@ -411,3 +428,165 @@ def test_pydantic_extractor_passes_task_and_input_to_agent():
         assert request.input_text in captured_prompt[0]
         assert result.success is True
         assert result.error is None
+
+
+@pytest.mark.parametrize(
+    ("output_retries", "expected_calls"),
+    [(0, 1), (3, 4)],
+)
+def test_pydantic_extractor_respects_configured_output_retry_limit(
+    output_retries, expected_calls
+):
+    number_of_calls = 0
+
+    async def agent_reply(
+        messages: list[ModelMessage], agent_info: AgentInfo
+    ) -> ModelResponse:
+        nonlocal number_of_calls
+        number_of_calls += 1
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name=agent_info.output_tools[0].name,
+                    args={"value": 1},
+                )
+            ]
+        )
+
+    worker = make_worker(output_retries=output_retries)
+    request = WorkerRequest(
+        task="Extract the order number",
+        input_text="Order ABC-123 was created",
+    )
+
+    with worker.agent.override(model=FunctionModel(agent_reply)):
+        result = worker.run(request=request)
+
+    assert number_of_calls == expected_calls
+    assert result.success is False
+    assert result.data is None
+    assert result.error == INVALID_OUTPUT_ERROR
+
+
+def test_pydantic_extractor_uses_configured_instructions():
+    configured_instructions = "Use only literal values from the supplied text."
+    captured_instructions = []
+
+    async def agent_reply(
+        messages: list[ModelMessage], agent_info: AgentInfo
+    ) -> ModelResponse:
+        captured_instructions.append(agent_info.instructions)
+
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name=agent_info.output_tools[0].name,
+                    args={"value": "ABC-123"},
+                )
+            ]
+        )
+
+    worker = make_worker(instructions=configured_instructions)
+    request = WorkerRequest(
+        task="Extract the order number",
+        input_text="Order ABC-123 was created",
+    )
+
+    with worker.agent.override(model=FunctionModel(agent_reply)):
+        result = worker.run(request=request)
+
+    assert result.success is True
+    assert captured_instructions == [configured_instructions]
+
+
+def test_pydantic_extractor_passes_configured_timeout_to_model_settings():
+    captured_timeouts = []
+
+    async def agent_reply(
+        messages: list[ModelMessage], agent_info: AgentInfo
+    ) -> ModelResponse:
+        assert agent_info.model_settings is not None
+        captured_timeouts.append(agent_info.model_settings.get("timeout"))
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name=agent_info.output_tools[0].name,
+                    args={"value": "ABC-123"},
+                )
+            ]
+        )
+
+    worker = make_worker(request_timeout_seconds=45)
+    request = WorkerRequest(
+        task="Extract the order number",
+        input_text="Order ABC-123 was created",
+    )
+
+    with worker.agent.override(model=FunctionModel(agent_reply)):
+        result = worker.run(request=request)
+
+    assert result.success is True
+    assert captured_timeouts == [45]
+
+
+def test_pydantic_extractor_sanitizes_provider_failure(monkeypatch):
+    def raise_provider_error(prompt: str):
+        raise ModelHTTPError(
+            status_code=503,
+            model_name="qwen3:1.7b",
+            body={"detail": "private provider response"},
+        )
+
+    worker = make_worker()
+    monkeypatch.setattr(worker.agent, "run_sync", raise_provider_error)
+    request = WorkerRequest(
+        task="Extract the order number",
+        input_text="Order ABC-123 was created",
+    )
+
+    result = worker.run(request=request)
+
+    assert result.success is False
+    assert result.data is None
+    assert result.error == PROVIDER_ERROR
+    assert "private provider response" not in result.error
+
+
+def test_pydantic_extractor_sanitizes_timeout_failure(monkeypatch):
+    def raise_timeout_error(prompt: str):
+        try:
+            raise TimeoutError("private timeout detail")
+        except TimeoutError as exc:
+            raise ModelAPIError(
+                model_name="qwen3:1.7b",
+                message="provider request timed out: private timeout detail",
+            ) from exc
+
+    worker = make_worker()
+    monkeypatch.setattr(worker.agent, "run_sync", raise_timeout_error)
+    request = WorkerRequest(
+        task="Extract the order number",
+        input_text="Order ABC-123 was created",
+    )
+
+    result = worker.run(request=request)
+
+    assert result.success is False
+    assert result.data is None
+    assert result.error == PROVIDER_ERROR
+    assert "private timeout detail" not in result.error
+
+
+def test_pydantic_extractor_does_not_hide_unexpected_programming_error(monkeypatch):
+    def raise_programming_error(prompt: str):
+        raise RuntimeError("programming defect")
+
+    worker = make_worker()
+    monkeypatch.setattr(worker.agent, "run_sync", raise_programming_error)
+    request = WorkerRequest(
+        task="Extract the order number",
+        input_text="Order ABC-123 was created",
+    )
+
+    with pytest.raises(RuntimeError, match="programming defect"):
+        worker.run(request=request)

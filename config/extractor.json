@@ -1,0 +1,7 @@
+{
+    "schema_version": 1,
+    "model": "qwen3:1.7b",
+    "instructions": "Extract the value requested by the task. Return only data matching the required schema.",
+    "output_retries": 1,
+    "request_timeout_seconds": 120
+}

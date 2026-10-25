@@ -1,12 +1,14 @@
+import os
+from functools import cache
+from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel, StringConstraints
 
-from local_agent.config import OLLAMA_BASE_URL
+from local_agent.config import load_extractor_config
 from local_agent.models import WorkerRequest, WorkerResult
-from local_agent.ollama import OllamaClient
-from local_agent.workers.extractor import ExtractorWorker
+from local_agent.workers.extractor import PydanticExtractorWorker
 
 
 class HealthResponse(BaseModel):
@@ -36,11 +38,20 @@ class EchoResponse(BaseModel):
 app = FastAPI()
 
 
-def _get_extractor_worker() -> ExtractorWorker:
+@cache
+def _get_extractor_worker() -> PydanticExtractorWorker:
     """Build the extractor worker used to handle extraction requests."""
-    client = OllamaClient(base_url=OLLAMA_BASE_URL)
 
-    worker = ExtractorWorker(client)
+    extractor_worker_settings = load_extractor_config(
+        Path(os.getenv("EXTRACTOR_CONFIG_PATH", "config/extractor.json"))
+    )
+
+    worker = PydanticExtractorWorker(
+        model=extractor_worker_settings.model,
+        instructions=extractor_worker_settings.instructions,
+        output_retries=extractor_worker_settings.output_retries,
+        request_timeout_seconds=extractor_worker_settings.request_timeout_seconds,
+    )
 
     return worker
 
@@ -60,7 +71,7 @@ def send_echo(request: EchoRequest):
 @app.post("/extract", response_model=WorkerResult)
 def extract(
     request: WorkerRequest,
-    worker: Annotated[ExtractorWorker, Depends(_get_extractor_worker)],
+    worker: Annotated[PydanticExtractorWorker, Depends(_get_extractor_worker)],
 ):
     """Return the worker result for a validated extraction request."""
     result = worker.run(request)
