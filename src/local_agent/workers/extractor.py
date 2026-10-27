@@ -1,6 +1,6 @@
 """Extractor workers for validated structured value extraction."""
 
-from pydantic_ai import ModelAPIError
+from pydantic_ai import ModelAPIError, NativeOutput
 from pydantic_ai.agent import Agent
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.models.ollama import OllamaModel
@@ -32,11 +32,12 @@ class PydanticExtractorWorker:
 
         self.agent = Agent(
             self.model,
-            output_type=ExtractionResult,
+            output_type=NativeOutput(ExtractionResult),
             instructions=self.instructions,
             retries={"output": self.output_retries},
             model_settings={
                 "timeout": self.request_timeout_seconds,
+                "thinking": False,
             },
         )
 

@@ -3,13 +3,14 @@ from pydantic_ai import (
     ModelMessage,
     ModelResponse,
     RetryPromptPart,
-    ToolCallPart,
+    TextPart,
     UnexpectedModelBehavior,
     UserPromptPart,
 )
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
+from pydantic_ai.profiles import ModelProfile
 
 from local_agent.models import WorkerRequest
 from local_agent.workers.extractor import PydanticExtractorWorker
@@ -102,7 +103,10 @@ class FakeRepairPromptClient:
 def test_pydantic_extractor_returns_worker_result():
     worker = make_worker()
 
-    test_model = TestModel(custom_output_args={"value": "ABC-123"})
+    test_model = TestModel(
+        custom_output_text='{"value": "ABC-123"}',
+        profile=ModelProfile(supports_json_schema_output=True),
+    )
 
     with worker.agent.override(model=test_model):
         request = WorkerRequest(
@@ -112,6 +116,8 @@ def test_pydantic_extractor_returns_worker_result():
 
         result = worker.run(request=request)
 
+        assert test_model.last_model_request_parameters is not None
+        assert test_model.last_model_request_parameters.output_mode == "native"
         assert result.data == {"value": "ABC-123"}
         assert result.success is True
         assert result.error is None
@@ -154,21 +160,9 @@ def test_pydantic_extractor_retries_invalid_output_and_returns_corrected_result(
                     has_retry_prompt = True
 
         if not has_retry_prompt:
-            return ModelResponse(
-                parts=[
-                    ToolCallPart(
-                        tool_name=agent_info.output_tools[0].name, args={"value": 1}
-                    )
-                ]
-            )
+            return ModelResponse(parts=[TextPart(content='{"value": 1}')])
 
-        return ModelResponse(
-            parts=[
-                ToolCallPart(
-                    tool_name=agent_info.output_tools[0].name, args={"value": "ABC-123"}
-                )
-            ]
-        )
+        return ModelResponse(parts=[TextPart(content='{"value": "ABC-123"}')])
 
     worker = make_worker()
 
@@ -202,21 +196,9 @@ def test_pydantic_extractor_returns_failure_after_retry_exhaustion():
                     has_retry_prompt = True
 
         if not has_retry_prompt:
-            return ModelResponse(
-                parts=[
-                    ToolCallPart(
-                        tool_name=agent_info.output_tools[0].name, args={"value": 1}
-                    )
-                ]
-            )
+            return ModelResponse(parts=[TextPart(content='{"value": 1}')])
 
-        return ModelResponse(
-            parts=[
-                ToolCallPart(
-                    tool_name=agent_info.output_tools[0].name, args={"value": 1}
-                )
-            ]
-        )
+        return ModelResponse(parts=[TextPart(content='{"value": 1}')])
 
     worker = make_worker()
 
@@ -245,13 +227,7 @@ def test_pydantic_extractor_passes_task_and_input_to_agent():
                 if isinstance(message_part, UserPromptPart):
                     captured_prompt.append(message_part.content)
 
-        return ModelResponse(
-            parts=[
-                ToolCallPart(
-                    tool_name=agent_info.output_tools[0].name, args={"value": "ABC-123"}
-                )
-            ]
-        )
+        return ModelResponse(parts=[TextPart(content='{"value": "ABC-123"}')])
 
     worker = make_worker()
 
@@ -284,14 +260,7 @@ def test_pydantic_extractor_respects_configured_output_retry_limit(
     ) -> ModelResponse:
         nonlocal number_of_calls
         number_of_calls += 1
-        return ModelResponse(
-            parts=[
-                ToolCallPart(
-                    tool_name=agent_info.output_tools[0].name,
-                    args={"value": 1},
-                )
-            ]
-        )
+        return ModelResponse(parts=[TextPart(content='{"value": 1}')])
 
     worker = make_worker(output_retries=output_retries)
     request = WorkerRequest(
@@ -317,14 +286,7 @@ def test_pydantic_extractor_uses_configured_instructions():
     ) -> ModelResponse:
         captured_instructions.append(agent_info.instructions)
 
-        return ModelResponse(
-            parts=[
-                ToolCallPart(
-                    tool_name=agent_info.output_tools[0].name,
-                    args={"value": "ABC-123"},
-                )
-            ]
-        )
+        return ModelResponse(parts=[TextPart(content='{"value": "ABC-123"}')])
 
     worker = make_worker(instructions=configured_instructions)
     request = WorkerRequest(
@@ -339,24 +301,19 @@ def test_pydantic_extractor_uses_configured_instructions():
     assert captured_instructions == [configured_instructions]
 
 
-def test_pydantic_extractor_passes_configured_timeout_to_model_settings():
-    captured_timeouts = []
+def test_pydantic_extractor_configures_timeout_and_disables_thinking():
+    captured_model_settings = []
 
     async def agent_reply(
         messages: list[ModelMessage], agent_info: AgentInfo
     ) -> ModelResponse:
         assert agent_info.model_settings is not None
-        captured_timeouts.append(agent_info.model_settings.get("timeout"))
-        return ModelResponse(
-            parts=[
-                ToolCallPart(
-                    tool_name=agent_info.output_tools[0].name,
-                    args={"value": "ABC-123"},
-                )
-            ]
-        )
+        captured_model_settings.append(agent_info.model_settings)
+        return ModelResponse(parts=[TextPart(content='{"value": "ABC-123"}')])
 
     worker = make_worker(request_timeout_seconds=45)
+    assert worker.agent.model_settings == {"timeout": 45, "thinking": False}
+
     request = WorkerRequest(
         task="Extract the order number",
         input_text="Order ABC-123 was created",
@@ -366,7 +323,7 @@ def test_pydantic_extractor_passes_configured_timeout_to_model_settings():
         result = worker.run(request=request)
 
     assert result.success is True
-    assert captured_timeouts == [45]
+    assert captured_model_settings == [{"timeout": 45}]
 
 
 def test_pydantic_extractor_sanitizes_provider_failure(monkeypatch):

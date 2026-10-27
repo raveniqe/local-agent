@@ -5,6 +5,7 @@ from unittest.mock import Mock
 import pytest
 from fastapi.testclient import TestClient
 from pydantic_ai.models.test import TestModel
+from pydantic_ai.profiles import ModelProfile
 
 import local_agent.api as api_module
 from local_agent.api import _get_extractor_worker, app, extract
@@ -96,7 +97,10 @@ def test_extract_integrates_with_intended_pydantic_worker():
         output_retries=1,
         request_timeout_seconds=120,
     )
-    test_model = TestModel(custom_output_args={"value": "Alice"})
+    test_model = TestModel(
+        custom_output_text='{"value": "Alice"}',
+        profile=ModelProfile(supports_json_schema_output=True),
+    )
     app.dependency_overrides[_get_extractor_worker] = lambda: worker
 
     try:
