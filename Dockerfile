@@ -12,6 +12,7 @@ RUN uv sync --locked --no-dev --no-install-project
 
 COPY README.md ./
 COPY src ./src
+COPY config ./config
 
 RUN uv sync --locked --no-dev
 

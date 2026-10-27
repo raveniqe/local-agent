@@ -30,7 +30,7 @@ W polskim języku, **"plecy"** to **jedna nazwa** (tzw. plecy tylne), a nie dwa 
 **Komentarz autora**
 Skad sie wziely muszle na plecach?
 
-###
+---
 
 ## Samotny wzrost a swiatlo nie zlikaje
 
@@ -60,3 +60,57 @@ Zamykając oczy, światło **nie znikaje**, ale **nie jest widoczne** z takiego 
 
 **Komentarz autora**
 Z moim wzrostem swiatlo nie jest widoczne jak u innych?
+
+---
+
+## Zolty to pomaranczowy
+
+**Pytanie**
+prompt='Czy pomarancz owoc nazywa sie pomarancz bo tak sie nazywa czy dlatego ze ma taki kolor?'
+
+**Model**
+model='qwen3:1.7b'
+
+**Odpowiedz**
+Pomarancz (w polskim j. lub angielskim) nazywany jest tymim imieniem zarówno z powodu koloru, jak i z historii.
+
+### 1. **Z powodu koloru**
+   - Nazywamy go "pomarancz" z powodu jego **koloru żółtego** (w polska m. to "pomarancz" oznacza "żółty"), a w angielskim j. to "orange" (w tym przypadku to też "żółty").
+   - W języku polskim i angielskim nazwa jest zawsze **zgodna z kolorem** — to jest podstawowa przyczyna.
+
+### 2. **Z historii i etymologii**
+   - W języku łacinie, to drzewo było nazywane **"pomarancis"** (z "poma" (do zmyślenia) i "ranc" (do rozmyślenia)), co oznacza "do zmyślenia" lub "do rozmyślenia".
+   - Zatem nazwa **nie jest z powodu koloru**, ale z powodu **historii i etymologii**.
+   - W Polsce nazwa "pomarancz" została zakończona na "cz" (np. "pomarancz", "pomarancze"), a w angielskim j. to "orange" (z "orang" – z łacina "orangis" – z "orans" – z "orans" (do zmyślenia)).
+
+### 3. **Podsumowanie**
+   - **Pomarancz** nazywany jest z powodu **koloru** (żółtego), ale jego nazwa pochodzi z **łacina** i **historii**.
+   - W Polsce i Anglii nazwa jest zawsze zgodna z kolorem, ale etyka jest zasugerowana przez nazwę łacinoję.
+
+**Podsumowując:**
+Pomarancz nazywany jest z powodu koloru, ale jego nazwa ma **historię i etymologię** z łacina. W polska i angielska j. to "pomarancz" oznacza "żółty" – to jest podstawowa przyczyna, a etymologia jest bardziej złożona.
+
+**Komentarz autora**
+Pomarancz tak sie nazywa bo jest żółty i jest zmyślony do rozmyślania
+
+---
+
+## Kura a jajko
+
+**Pytanie**
+prompt='Co bylo pierwsze, jajko czy kura?'
+
+**Model**
+model='qwen3:1.7b'
+
+**Odpowiedz**
+Pierwsze, co było, to **kura**.
+
+W kontekście ewolucji, kura to jedno z odpowiednich przedrostków, który rozwinął się z dinozaura, a jajko to produkt jej reprodukcji. Zatem kura jest przed jajkiem w czasie ewolucji.
+
+W kontekście fizycznym, jajko jest produktem kury, więc kura jest pierwsza. Jednak z punktu widzenia ewolucji, kura to przedrostek, który rozwinął się z dinozaura, a jajko to jego produkt.
+
+**Odpowiedź:** Kura.
+
+**Komentarz autora**
+Kura jako przedrostek ewolucyjny
