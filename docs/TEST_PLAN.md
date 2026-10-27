@@ -4,8 +4,8 @@
 
 The default pytest suite proves configuration, application control flow,
 validation, retry behavior, and stable failures without relying on Ollama or
-model quality. A separate, explicitly executed Live LLM Chaos Test runner will
-cover the real local integration after the JSON-configured extractor works.
+model quality. A separate, explicitly executed live evaluation runner covers
+real local Ollama integration and a small model-quality baseline.
 
 Tests must remain reproducible, must not weaken assertions to accommodate an
 implementation, and must fail if a real model request is attempted accidentally.
@@ -15,17 +15,17 @@ implementation, and must fail if a real model request is attempted accidentally.
 | Strategy | Location and command | Network/model policy | Purpose |
 | --- | --- | --- | --- |
 | Deterministic pytest tests | `tests/`, run with the standard pytest command | Offline. Real model requests are blocked. | Verify configuration, validation, control flow, retries, failure translation, and API wiring. |
-| Live LLM Chaos Tests | A dedicated runner under `scripts/`, executed explicitly and never through standard pytest | Real local Ollama calls are expected. | Explore model variability, malformed responses, ambiguous inputs, and provider availability. |
+| Live LLM evaluation | `scripts/evaluate_extractor_models.py`, executed explicitly and never through standard pytest | Real Ollama calls are expected. | Compare extraction accuracy, variability, failures, and latency for selected models. |
 
 These strategies must not share a default entry point. Files under `scripts/`
 must not be named or structured for pytest discovery, and standard pytest must
 never start Ollama, download a model, or send a real LLM request. Conversely,
-chaos outcomes are observations about a real model, not deterministic pytest
+live outcomes are observations about a real model, not deterministic pytest
 assertions.
 
-The Chaos Test Suite is intentionally out of scope for the current test
-implementation. No chaos runner or large prompt dataset should be created until
-the JSON-configured Pydantic AI extractor is functional.
+The focused live evaluation runner is implemented. It contains a small synthetic
+English/Polish dataset; it is not a general chaos platform and is not part of the
+default pytest suite.
 
 ## 3. Deterministic pytest layers
 
@@ -33,7 +33,7 @@ the JSON-configured Pydantic AI extractor is functional.
 
 Use temporary JSON files. No agent, HTTP application, or network is needed.
 
-Required cases:
+Covered cases:
 
 | Case | Expected result |
 | --- | --- |
@@ -69,12 +69,14 @@ Keep the already valuable cases:
 - Invalid first output can be corrected on the configured retry.
 - Retry exhaustion returns a controlled failure.
 
-Add or refine these V1 cases:
+Covered V1 cases:
 
 | Case | What the assertion proves |
 | --- | --- |
 | Configured instructions are present | JSON instructions, not a hidden constant, control the agent. |
 | Configured model is used at composition | Model selection comes from JSON. |
+| Native output mode | The agent requests provider-native structured output. |
+| Thinking disabled | The extractor keeps `thinking=False` in agent model settings. |
 | `output_retries=0` | No additional output attempt is made. |
 | `output_retries=3` | The worker respects the upper configured budget. |
 | Whitespace-only value | Output validation rejects semantically empty data. |
@@ -93,7 +95,7 @@ production-facing worker call remains synchronous.
 Use FastAPI's test client and dependency overrides/fakes. These tests verify
 wiring, not model intelligence.
 
-Required cases:
+Covered cases:
 
 - Valid request reaches the Pydantic extractor dependency and preserves the
   success response shape.
@@ -104,13 +106,12 @@ Required cases:
 - Blank or missing `input_text` returns request validation failure without
   calling the worker.
 - An unexpected worker exception is not converted into a successful HTTP body.
-- Application composition fails/readiness is denied for invalid configuration.
-- A regression that reintroduces `ExtractorWorker` into the endpoint is detected.
+- Worker composition fails before a model request for invalid configuration.
+- A regression that reintroduces the legacy custom worker into the endpoint is
+  detected.
 
-The current API tests target the legacy worker. During the activation milestone,
-change them because the approved production dependency changes, not merely to
-make a failure disappear. Preserve assertions about the public request and
-response contract wherever that contract is unchanged.
+The API tests target `PydanticExtractorWorker` and preserve the public request
+and response contract while replacing the real model boundary.
 
 ## 4. Test isolation rules
 
@@ -124,39 +125,67 @@ response contract wherever that contract is unchanged.
 - A test may count model calls to prove retries, but should not assert incidental
   formatting unless formatting is part of the contract.
 
-## 5. Live LLM Chaos Tests (future work)
+## 5. Live LLM evaluation runner
 
-The future explicit runner should live under `scripts/` and may include the
-original live Ollama smoke scenario as its smallest case. It must document the
-required Ollama version, configured model, config path, local base URL, and how
-results are recorded. It must not be imported or executed by pytest.
+The explicit runner lives at `scripts/evaluate_extractor_models.py`. It reads the
+validated extractor configuration, uses the production worker, and can override
+the model from the command line without creating a second config file. It must
+not be imported or executed by pytest.
 
-Minimum future scenarios:
+Useful commands:
 
-1. Successful extraction through a real configured Ollama model.
-2. Repeated execution of the same input to observe output variability.
-3. Malformed, incomplete, and ambiguous inputs.
-4. Unavailable model, stopped Ollama, and request timeout.
-5. Verification that every response still respects the public result envelope.
+```bash
+uv run --env-file .env python scripts/evaluate_extractor_models.py --list-cases
 
-Chaos results must not be treated as deterministic unit-test evidence. They can
-inform later evaluation cases or prompt changes, but those changes need their
-own reviewed contract.
+PYDANTIC_AI_NO_BANNER=1 uv run --env-file .env \
+  python scripts/evaluate_extractor_models.py \
+  --model qwen3:4b-instruct \
+  --model gemma3:4b \
+  --repeat 3
+```
+
+The runner supports filtering by case, language, and difficulty. For each run it
+records exact-value success, wrong values, controlled worker errors, unexpected
+exceptions, and elapsed time. It exits non-zero when any evaluated run fails.
+
+The implemented dataset covers:
+
+1. English and Polish extraction cases.
+2. Easy, medium, and hard examples with exact expected values.
+3. Distractors, replaced identifiers, internal punctuation, dates, amounts, and
+   identifiers.
+4. Repeated execution to observe output variability.
+5. Multiple model comparison with accuracy and latency summaries.
+
+Deliberate provider outage, unavailable-model, timeout, malformed-input, and
+ambiguous-input scenarios remain future extensions to the live dataset. The
+runner already records controlled worker errors and unexpected exceptions if
+they occur during an ordinary evaluation.
+
+Live results must not be treated as deterministic unit-test evidence. They can
+inform model selection, evaluation cases, or prompt changes, but those changes
+need their own reviewed contract.
+
+The V1 selection run used 18 English/Polish cases repeated three times. Both
+`qwen3:4b-instruct` and `gemma3:4b` produced 54/54 exact matches in that
+environment; Qwen averaged 4.1 seconds and Gemma 5.4 seconds. This observation
+supports the current extractor model choice but does not predict performance on
+future tools or open-ended tasks.
 
 ## 6. Recommended execution groups
 
-The exact marker names can follow the project's conventions when implemented:
+The project uses separate entry points rather than pytest markers:
 
 ```text
 pytest: config unit + worker unit + API integration (offline)
-chaos:  explicit scripts/ runner with real Ollama (not pytest, future work)
-future: model-quality evaluations
+live:   explicit scripts/ runner with real Ollama (not pytest)
+future: larger representative datasets and open-tool evaluations
 ```
 
 During development, run the narrowest relevant module first, then the entire
-default suite. The deterministic V1 verification is from a clean checkout with
-the same documented pytest command and without a running Ollama service. Any
-later chaos run is invoked and reported separately.
+default suite. The deterministic V1 verification uses the documented pytest
+command without a running Ollama service. Any later live run is invoked and
+reported separately.
 
 ## 7. Acceptance traceability
 
@@ -171,15 +200,19 @@ later chaos run is invoked and reported separately.
 | Stable provider/timeout failure | Simulated exception tests. |
 | Unexpected bugs remain visible | Propagation test. |
 | No accidental network | Global model-request block plus fakes. |
-| Real Ollama compatibility | Future explicit Live LLM Chaos Test runner under `scripts/`. |
+| Real Ollama compatibility | Explicit live evaluation runner under `scripts/`. |
 
 ## 8. Quality tests deferred beyond V1
 
 Unit tests cannot establish whether a real model extracts well across varied
-documents. After V1, create a small versioned evaluation dataset containing
-representative inputs, expected values, ambiguous cases, and explicit scoring
-rules. Keep that separate from application control-flow tests and do not make the
-initial V1 depend on a general evaluation platform.
+documents. The current live runner is a small synthetic baseline. After V1,
+expand evaluation with representative inputs, ambiguous and negative cases, and
+explicit scoring rules for each new capability. Keep those evaluations separate
+from application control-flow tests.
+
+Some environments emit a non-failing `pydantic_graph` event-loop deprecation
+warning during synchronous agent tests. It does not change the V1 result, but it
+should be monitored when dependencies are upgraded.
 
 ## 9. Official references
 

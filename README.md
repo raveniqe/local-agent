@@ -1,44 +1,51 @@
 # local-agent
 
-`local-agent` is a small, self-hosted LLM application built to explore how reliable AI workers and agents can be designed, tested, exposed through an API, and deployed as normal software.
+`local-agent` is a small, self-hosted LLM application built to explore how
+reliable AI workers can be designed, tested, exposed through an API, and
+deployed as normal software.
 
-The project currently provides a constrained extraction worker backed by a locally hosted Ollama instance. It accepts a task and input text, asks a configured model for structured output, validates the result with Pydantic, and retries once with repair context when the model returns invalid data.
+Extractor V1 accepts a task and input text, asks a JSON-configured Ollama model
+for native structured output, validates the result with Pydantic, and returns a
+consistent success or failure envelope. Output retries and the provider-request
+timeout are also configured through JSON.
 
-The Ollama host may expose multiple local models. Individual workers can be configured to use a specific model depending on their role. The current extraction worker is configured to use `qwen3:1.7b`.
+The active extractor model is `qwen3:4b-instruct`. A separate live evaluation
+runner can compare this model with other models available on the Ollama host
+without changing the production configuration.
 
-The longer-term goal is to grow this into a modular local agent runtime with multiple specialized models, tool calling, routing, bounded agent loops, automation integrations, and model evaluation.
+V1 intentionally contains one extractor, one fixed result schema, one provider,
+and one HTTP extraction endpoint. More open-ended tools require their own
+contracts and evaluations; this repository does not yet provide a general agent
+framework.
 
 ## Current architecture
 
-```text id="m5alqs"
+```text
 HTTP client
     ↓
 FastAPI
     ↓
 WorkerRequest
     ↓
-ExtractorWorker
+cached configuration and worker dependency
     ↓
-ChatClient protocol
+PydanticExtractorWorker
     ↓
-OllamaClient
+Pydantic AI Agent
     ↓
-Ollama
+OllamaModel through the OpenAI-compatible /v1 endpoint
     ↓
-configured local model
+NativeOutput(ExtractionResult)
     ↓
-structured output validation
-    ↓
-WorkerResult
+WorkerResult validation
     ↓
 HTTP response
 ```
 
-The worker depends on a behavioral `ChatClient` protocol rather than directly on Ollama.
-
-This keeps the worker independent from the concrete model provider and makes the LLM boundary easy to replace during testing.
-
-The runtime is also not conceptually tied to a single model. Ollama can host multiple models, while each worker or future agent can be composed with the model appropriate for its task.
+Stable extractor behavior comes from `config/extractor.json`. The Ollama address
+remains environment-specific and comes from `OLLAMA_BASE_URL`. Tests replace the
+real model with Pydantic AI test doubles while keeping application validation and
+control flow under test.
 
 ## What works today
 
@@ -46,12 +53,15 @@ The current version includes:
 
 - FastAPI HTTP API
 - Pydantic request and response validation
-- `ExtractorWorker` for constrained structured extraction
-- Ollama HTTP client
-- structured JSON validation
-- retry with repair context after invalid model output
+- `PydanticExtractorWorker` for constrained structured extraction
+- JSON configuration with strict validation and unknown-field rejection
+- Pydantic AI `OllamaModel` integration
+- native structured output validated as `ExtractionResult`
+- configured structured-output retries and provider-request timeout
+- sanitized provider and invalid-output failures
 - dependency injection between the API and worker
-- fake LLM clients for deterministic API and worker tests
+- Pydantic AI test doubles for deterministic API and worker tests
+- explicit English/Polish live model evaluation runner
 - Docker image
 - GitHub Actions CI
 - Docker image publishing to GHCR
@@ -59,13 +69,14 @@ The current version includes:
 
 The application has been tested end-to-end through the full path:
 
-```text id="0391jc"
+```text
 HTTP request
 → FastAPI
-→ ExtractorWorker
+→ PydanticExtractorWorker
 → Ollama
 → configured local model
-→ validated WorkerResult
+→ NativeOutput(ExtractionResult)
+→ WorkerResult
 → HTTP response
 ```
 
@@ -97,13 +108,15 @@ Successful response:
 }
 ```
 
-If the model fails to produce a valid structured result after both attempts, the HTTP request can still complete successfully while the worker reports a controlled failure:
+If the model fails to produce a valid structured result within the configured
+retry budget, the HTTP request can still complete successfully while the worker
+reports a controlled failure:
 
 ```json id="3bo2b2"
 {
   "success": false,
   "data": null,
-  "error": "Previous response was not in valid JSON."
+  "error": "Extractor could not produce valid structured output."
 }
 ```
 
@@ -118,10 +131,10 @@ For local development:
 - [Ollama](https://ollama.com/)
 - at least one Ollama model available to the application
 
-The current `ExtractorWorker` configuration uses:
+The current JSON configuration uses:
 
-```text id="model-current"
-qwen3:1.7b
+```text
+qwen3:4b-instruct
 ```
 
 but the Ollama instance may contain additional models for other workers, experiments, or future agent roles.
@@ -139,7 +152,7 @@ uv sync
 For the current extractor configuration, make sure the default extraction model is available:
 
 ```bash id="xcfhba"
-ollama pull qwen3:1.7b
+ollama pull qwen3:4b-instruct
 ```
 
 If Ollama is not already running as a service:
@@ -201,27 +214,48 @@ The client does not need direct access to Ollama.
 
 The deployed `local-agent` service communicates with Ollama on its behalf.
 
-```text id="fuvdy4"
+```text
 client
   ↓
 local-agent host
   ↓
 FastAPI
   ↓
-ExtractorWorker
+PydanticExtractorWorker
   ↓
 Ollama host
   ↓
-selected model
+JSON-configured model
 ```
 
 ## Configuration
 
-The Ollama endpoint is configured through an environment variable.
+Stable extractor behavior is configured in `config/extractor.json`:
+
+```json
+{
+  "schema_version": 1,
+  "model": "qwen3:4b-instruct",
+  "instructions": "Extract the value requested by the task. Return only data matching the required schema.",
+  "output_retries": 1,
+  "request_timeout_seconds": 120
+}
+```
+
+All fields are required and unknown fields are rejected. `schema_version` must
+be `1`, `output_retries` must be between `0` and `3`, and the timeout must be
+greater than `0` and no greater than `600` seconds.
+
+Set `EXTRACTOR_CONFIG_PATH` to load a different configuration file. Otherwise
+the application uses `config/extractor.json`, resolved from its working
+directory.
+
+Deployment-specific values remain environment variables.
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Base URL of the Ollama HTTP API |
+| `EXTRACTOR_CONFIG_PATH` | `config/extractor.json` | Path to the extractor behavior configuration |
 
 Example with Ollama running on another host:
 
@@ -230,9 +264,8 @@ OLLAMA_BASE_URL=http://<ollama-host>:11434 \
 uv run uvicorn local_agent.api:app --reload
 ```
 
-Configuration is injected at runtime rather than baked into the application image.
-
-Model selection is currently performed when individual workers are composed. The extraction worker currently uses `qwen3:1.7b`; making model selection configurable at runtime is part of the roadmap.
+Do not put credentials, private deployment URLs, or customer data in the JSON
+configuration.
 
 ## API
 
@@ -317,7 +350,7 @@ Controlled worker failure:
 {
   "success": false,
   "data": null,
-  "error": "Previous response was not in valid JSON."
+  "error": "Extractor could not produce valid structured output."
 }
 ```
 
@@ -337,34 +370,38 @@ The expected model response is:
 
 The processing flow is:
 
-```text id="ep9inc"
+```text
+task + input text
+    ↓
+Pydantic AI requests native JSON matching ExtractionResult
+    ↓
 model response
     ↓
-Pydantic validation
+JSON decoding and Pydantic validation
     ├── valid
     │     ↓
-    │   success
+    │   successful WorkerResult
     │
     └── invalid
           ↓
-       normalize validation issue
-          ↓
-       build repair prompt
-          ↓
-       second model call
+       Pydantic AI output retry, within the configured budget
           ↓
        validate again
 ```
 
-If the second result is also invalid, the worker returns a controlled `WorkerResult` with:
+If the configured retry budget is exhausted, the worker returns:
 
-```text id="lcvsdx"
-success = false
-data = null
-error = <validation-related message>
+```json
+{
+  "success": false,
+  "data": null,
+  "error": "Extractor could not produce valid structured output."
+}
 ```
 
-The worker does not expose malformed model output directly as a successful structured result.
+Expected provider failures use the sanitized error `Model provider request
+failed.` Unexpected programming exceptions are not hidden behind a controlled
+worker failure.
 
 ## Testing
 
@@ -374,9 +411,12 @@ The test suite does not require a running Ollama instance.
 uv run pytest
 ```
 
-The LLM boundary is replaced with deterministic fake `ChatClient` implementations while the real application layers remain under test.
+The LLM boundary is replaced with Pydantic AI `TestModel` or `FunctionModel`
+instances while the real application layers remain under test. Test setup also
+blocks accidental requests to non-test models.
 
-For API tests, FastAPI dependency overrides inject an `ExtractorWorker` configured with a fake chat client.
+For API tests, FastAPI dependency overrides inject the intended Pydantic AI
+worker or a worker mock.
 
 This allows deterministic scenarios such as:
 
@@ -384,7 +424,7 @@ This allows deterministic scenarios such as:
 valid model output
 → success=True
 
-invalid JSON twice
+invalid structured output until retry exhaustion
 → retry
 → success=False
 ```
@@ -403,13 +443,31 @@ The tested path still includes:
 HTTP request
 → FastAPI
 → WorkerRequest
-→ ExtractorWorker
+→ PydanticExtractorWorker
 → validation/retry logic
 → WorkerResult
 → HTTP response
 ```
 
 Only the external LLM boundary is replaced.
+
+### Live model evaluation
+
+Live evaluation is separate from pytest and makes real Ollama requests:
+
+```bash
+uv run --env-file .env python scripts/evaluate_extractor_models.py --list-cases
+
+PYDANTIC_AI_NO_BANNER=1 uv run --env-file .env \
+  python scripts/evaluate_extractor_models.py \
+  --model qwen3:4b-instruct \
+  --model gemma3:4b \
+  --repeat 3
+```
+
+The runner contains 18 synthetic English/Polish extraction cases and can filter
+by model, case, language, or difficulty. Its results measure only that dataset;
+they do not establish quality for future tools or open-ended agent behavior.
 
 ## Docker
 
@@ -425,8 +483,14 @@ Run it:
 docker run --rm \
   -p 8000:8000 \
   -e OLLAMA_BASE_URL=http://<ollama-host>:11434 \
+  -e EXTRACTOR_CONFIG_PATH=/app/config/extractor.json \
+  -v "$PWD/config/extractor.json:/app/config/extractor.json:ro" \
   local-agent
 ```
+
+The image does not currently bundle an extractor configuration. Mount the file
+read-only, as above, or provide another mounted path through
+`EXTRACTOR_CONFIG_PATH`.
 
 The container starts Uvicorn with the FastAPI application and listens on:
 
@@ -514,14 +578,17 @@ src/local_agent/
 ├── api.py
 ├── config.py
 ├── models.py
-├── ollama.py
-├── protocols.py
-├── validation.py
 └── workers/
     └── extractor.py
 
 tests/
 └── ...
+
+config/
+└── extractor.json
+
+scripts/
+└── evaluate_extractor_models.py
 
 docs/
 └── ...
@@ -534,35 +601,26 @@ api.py
 → FastAPI HTTP boundary and dependency composition
 
 config.py
-→ runtime configuration
+→ extractor configuration model, loader, and provider location
 
 models.py
 → Pydantic data contracts
 
-protocols.py
-→ behavioral interfaces such as ChatClient
-
-ollama.py
-→ Ollama HTTP integration
-
-validation.py
-→ normalization of model-output validation failures
-
 workers/extractor.py
-→ extraction workflow, retry logic and structured result handling
+→ Pydantic AI agent composition, extraction, and failure normalization
+
+scripts/evaluate_extractor_models.py
+→ explicit live model-quality and latency evaluation
 ```
 
 ## Roadmap
 
-The current extractor is intentionally small.
-
-It is the first worker used to establish the runtime architecture before adding more autonomous behavior.
-
-The runtime is intended to support multiple specialized local models rather than assuming that one model should handle every task.
+The completed V1 extractor is intentionally small. New capabilities should be
+added only after their request, output, safety, and evaluation contracts are
+defined.
 
 Planned areas include:
 
-- configurable model selection
 - model-to-task routing
 - explicit readiness checks for external dependencies
 - richer worker error taxonomy
@@ -573,9 +631,8 @@ Planned areas include:
 - orchestration across multiple workers
 - n8n integration
 - real automation workflows
-- evaluation datasets
-- repeatable model-quality benchmarks
-- comparison of local models for specialized workloads
+- larger representative evaluation datasets
+- benchmarks for tool selection, arguments, side effects, and failure recovery
 
 The goal is not to build an unrestricted autonomous-agent framework.
 
@@ -584,8 +641,9 @@ The project focuses on small, explicit components with constrained responsibilit
 ## Current limitations
 
 - The extractor currently expects a single result shape: `{"value": "..."}`.
-- The current extractor is configured to use `qwen3:1.7b`.
-- Model selection is not yet exposed through runtime configuration or routing.
+- The current extractor is configured to use `qwen3:4b-instruct` through JSON.
+- One configured model is active at a time; runtime model routing is not
+  implemented.
 - Ollama connection failures and timeouts do not yet have a dedicated API error model.
 - Only the extraction worker is currently exposed through the main task API.
 - Tool calling is not implemented yet.
@@ -599,7 +657,7 @@ The project follows a few simple principles:
 
 - treat LLM output as untrusted input
 - validate boundaries explicitly
-- keep model providers behind small interfaces
+- keep provider-specific composition small and explicit
 - allow specialized models to serve specialized roles
 - prefer deterministic code around nondeterministic models
 - test application behavior without requiring live inference
@@ -610,16 +668,18 @@ The project follows a few simple principles:
 
 ## Status
 
-Active development.
+Extractor V1 is implemented and verified. The repository remains under active
+development for later capabilities.
 
 Currently working end-to-end:
 
 ```text id="n660gj"
 FastAPI
-→ ExtractorWorker
-→ Ollama
-→ configured local model
-→ structured validation
+→ PydanticExtractorWorker
+→ Pydantic AI
+→ Ollama configured by environment
+→ qwen3:4b-instruct configured by JSON
+→ NativeOutput(ExtractionResult)
 → Docker
 → CI
 → GHCR
@@ -627,6 +687,6 @@ FastAPI
 → self-hosted deployment
 ```
 
-The current extraction path uses `qwen3:1.7b`, while the Ollama runtime can host additional models for other specialized workloads.
-
-The next major development area is tool calling, model routing, and agent orchestration.
+The next capability should be scoped and evaluated independently. Passing the
+extractor benchmark does not imply that the selected model is safe or effective
+for open-ended tool use.

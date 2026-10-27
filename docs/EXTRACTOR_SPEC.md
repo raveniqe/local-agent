@@ -1,7 +1,6 @@
 # Extractor V1 specification
 
-Status: proposed implementation contract based on the repository state inspected
-on 2026-10-22.
+Status: implemented and verified on 2026-10-27.
 
 ## 1. Goal
 
@@ -13,39 +12,36 @@ from a JSON file.
 V1 is intentionally not a general worker framework. It has one provider, one
 extractor, one fixed output model, and one request path.
 
-## 2. Verified current state
+## 2. Implemented architecture
 
-The repository currently contains two parallel implementations:
+The application has one active extraction path:
 
 ```text
 POST /extract
-    -> ExtractorWorker
-    -> custom OllamaClient calling /api/chat
-    -> manual JSON validation and repair prompt
-
-PydanticExtractorWorker (not wired to POST /extract)
+    -> WorkerRequest validation
+    -> cached application composition
+    -> validated config/extractor.json
+    -> PydanticExtractorWorker
     -> Pydantic AI Agent
     -> OllamaModel through the OpenAI-compatible /v1 endpoint
-    -> ExtractionResult validation and Pydantic AI output retries
+    -> NativeOutput(ExtractionResult)
+    -> WorkerResult validation
+    -> HTTP response
 ```
 
-The current domain contracts are:
+The implemented domain contracts are:
 
-- `WorkerRequest.task`: stripped, non-empty string.
-- `WorkerRequest.input_text`: stripped, non-empty string.
-- `ExtractionResult.value`: string with `min_length=1`. It currently does not
-  strip whitespace, so a whitespace-only value can pass validation.
-- `WorkerResult`: `success`, optional `data`, and optional `error`. Its validator
-  rejects a successful result with an error and a failed result without an
-  error, but it does not yet require data on success or forbid data on failure.
+- `WorkerRequest.task` and `WorkerRequest.input_text` are stripped, non-empty
+  strings.
+- `ExtractionResult.value` is a stripped, non-empty string.
+- A successful `WorkerResult` contains data and no error.
+- A failed `WorkerResult` contains an error and no data.
+- `POST /extract` depends on `PydanticExtractorWorker`; the legacy custom Ollama
+  client path is no longer active.
 
-The focused Pydantic extractor suite currently has 14 passing tests. It verifies
-successful structured output, prompt contents, output retry behavior, and retry
-exhaustion. The HTTP tests still exercise the legacy worker.
-
-`pyproject.toml` declares Python 3.13 or newer, Pydantic 2.13.5 or newer, and
-Pydantic AI with the OpenAI provider. The `local-agent` console command currently
-prints a greeting and is not a usable extractor interface.
+The default pytest suite is deterministic and blocks accidental real model
+requests. Real Ollama compatibility and model quality are evaluated separately
+with `scripts/evaluate_extractor_models.py`.
 
 ## 3. V1 boundaries
 
@@ -59,7 +55,7 @@ prints a greeting and is not a usable extractor interface.
 - Programmatic invocation through `worker.run(WorkerRequest(...))`.
 - HTTP invocation through `POST /extract`.
 - Clear configuration, provider, and invalid-output failure behavior.
-- Deterministic automated tests and one optional live smoke test.
+- Deterministic automated tests and a separate explicit live evaluation runner.
 
 ### Out of scope
 
@@ -76,12 +72,12 @@ prints a greeting and is not a usable extractor interface.
 
 ## 4. Configuration contract
 
-Proposed V1 file, shown with representative values:
+Active V1 file, shown with its current values:
 
 ```json
 {
   "schema_version": 1,
-  "model": "qwen3:1.7b",
+  "model": "qwen3:4b-instruct",
   "instructions": "Extract the value requested by the task. Return only data matching the required schema.",
   "output_retries": 1,
   "request_timeout_seconds": 120
@@ -98,9 +94,10 @@ Proposed V1 file, shown with representative values:
 
 All fields are required in V1 and unknown fields are rejected. Explicit fields
 make a configuration reproducible and rejecting extras catches misspellings.
-JSON is decoded as UTF-8 and validated before the model or API serves work.
+JSON is decoded as UTF-8 and validated before the extractor is created or a
+model request is made.
 
-Configuration discovery is a proposed decision:
+Configuration discovery is implemented as follows:
 
 1. `EXTRACTOR_CONFIG_PATH` identifies the file when set.
 2. Otherwise the application uses `config/extractor.json`, resolved from the
@@ -116,8 +113,9 @@ worker; the worker does not read the JSON file itself.
 
 `OLLAMA_BASE_URL` remains an environment variable, with the current local default
 of `http://localhost:11434`. It is deployment configuration rather than extractor
-behavior and may later contain environment-specific network information. V1
-normalizes it to exactly one `/v1` suffix for the Pydantic AI Ollama provider.
+behavior. V1 strips trailing slashes and appends `/v1` for the Pydantic AI Ollama
+provider, so the environment value must be the Ollama base URL without an
+existing `/v1` suffix.
 
 The JSON file must not contain credentials or secrets.
 
@@ -175,26 +173,24 @@ and different HTTP statuses.
 
 - The agent's static `instructions` come from the validated JSON configuration.
 - `task` and `input_text` remain per-request user prompt content.
-- The output type remains the concrete `ExtractionResult` Pydantic model.
-- V1 keeps Pydantic AI's normal structured-output mechanism already exercised by
-  the tests. Switching to native Ollama structured output is deferred until the
-  chosen model and local Ollama version are tested for compatibility.
+- The output contract is the concrete `ExtractionResult` Pydantic model, exposed
+  to the provider with `NativeOutput`.
+- The agent disables model thinking for extraction. This is a fixed V1 runtime
+  compatibility setting, not a JSON configuration field.
 - `output_retries=N` means one initial output attempt plus at most `N` additional
   output attempts.
-- A successful value should be stripped and non-empty. Making whitespace-only
-  output invalid is a V1 contract tightening and requires a deliberate production
-  model change by the user.
-- A successful `WorkerResult` must contain data and no error. A failed result must
-  contain an error and no data. Tightening these invariants is also an explicit
-  implementation task, not an undocumented test workaround.
+- A successful value is stripped and non-empty; whitespace-only output is
+  rejected.
+- A successful `WorkerResult` contains data and no error. A failed result
+  contains an error and no data.
 
 ## 7. Failure behavior
 
 | Failure | Required V1 behavior | Model request made? |
 | --- | --- | --- |
-| Missing config file | Fail application startup/readiness with the file path and failure category. | No |
-| Invalid UTF-8 or malformed JSON | Fail startup with a configuration error; do not silently use defaults. | No |
-| Invalid, missing, or unknown config field | Fail startup with field-level validation details. | No |
+| Missing config file | Fail worker composition with the file path and failure category. | No |
+| Invalid UTF-8 or malformed JSON | Fail worker composition with a configuration error; do not silently use defaults. | No |
+| Invalid, missing, or unknown config field | Fail worker composition with validation details. | No |
 | Invalid HTTP request | FastAPI validation response; worker is not called. | No |
 | Invalid structured output, retries available | Let Pydantic AI issue its output retry. | Yes |
 | Invalid structured output, retries exhausted | Return failed `WorkerResult` with `Extractor could not produce valid structured output.` | Yes |
@@ -206,14 +202,13 @@ prompts, input documents, credentials, and stack traces must not be copied into
 the response. Internal logging is useful but detailed logging policy is outside
 this V1; it must not leak those values.
 
-Implementation must identify the concrete timeout/transport exceptions produced
-by the installed Pydantic AI and provider stack. It must not use a broad
-`except Exception` to convert programmer errors into a misleading provider
-failure.
+The implementation translates Pydantic AI `ModelAPIError` failures into the
+stable provider error. It does not use a broad `except Exception`, so programmer
+errors remain visible.
 
 ## 8. Acceptance criteria
 
-V1 is complete when all of the following are true:
+V1 satisfies the following acceptance criteria:
 
 1. A valid JSON config is loaded once and controls model, instructions, output
    retries, and provider-request timeout.
@@ -231,15 +226,13 @@ V1 is complete when all of the following are true:
 8. Unexpected exceptions remain visible rather than being mislabeled.
 9. Default tests are reproducible offline and prevent accidental real model
    requests.
-10. An optional, documented Ollama smoke test proves the real local integration
-    without becoming part of the default test suite.
-11. README and architecture documentation describe the active implementation,
-    not both paths as if both were current. This documentation update belongs to
-    the final implementation milestone, not this planning-only change.
+10. An explicit live evaluation runner proves real Ollama integration without
+    becoming part of the default test suite.
+11. README and architecture documentation describe the active implementation.
 
-## 9. Decisions and remaining uncertainties
+## 9. Decisions and remaining limitations
 
-The following choices are proposed because they minimize migration risk:
+The following choices define V1:
 
 - Keep `WorkerRequest`, `WorkerResult`, and `POST /extract` instead of inventing a
   new public interface.
@@ -247,20 +240,17 @@ The following choices are proposed because they minimize migration risk:
 - Keep a fixed `ExtractionResult` instead of accepting schemas from JSON.
 - Keep provider location in the environment and agent behavior in JSON.
 - Normalize public error text instead of exposing third-party exception wording.
-- Load configuration once and fail fast instead of changing behavior while the
-  process is running.
-
-Items to confirm during implementation:
-
-- Whether config loading uses FastAPI lifespan state or a cached composition
-  function. The externally visible requirement is load-once/fail-fast behavior.
-- Which installed provider exception represents connection timeout in practice.
-  Confirm it with an isolated test before finalizing the exception translation.
-- Whether the legacy worker is deleted immediately after migration or retained
-  temporarily as clearly non-active code. V1 must not leave two selectable
-  production paths.
-- The upper timeout and retry bounds are conservative guardrails, not limitations
-  imposed by Pydantic AI. Change them only through an explicit contract decision.
+- Load configuration once when the cached extractor dependency is first needed,
+  instead of changing behavior while the process is running.
+- Application composition uses a cached FastAPI dependency.
+- Expected Pydantic AI provider failures, including wrapped timeouts, are exposed
+  as a stable sanitized worker error. Unexpected programming exceptions remain
+  visible.
+- The upper timeout and retry bounds are project guardrails, not limits imposed
+  by Pydantic AI.
+- Model quality is only established for the versioned evaluation cases that were
+  actually run. The selected model is not assumed to be best for future tools or
+  more open-ended agent behavior.
 
 ## 10. Official references
 
