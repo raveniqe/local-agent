@@ -469,6 +469,23 @@ The runner contains 18 synthetic English/Polish extraction cases and can filter
 by model, case, language, or difficulty. Its results measure only that dataset;
 they do not establish quality for future tools or open-ended agent behavior.
 
+#### Extractor V1 baseline
+
+The recorded V1 model-selection run executed all 18 cases three times for each
+model, for 54 requests per model:
+
+| Model | Exact matches | Pass rate | Average response time |
+| --- | ---: | ---: | ---: |
+| `qwen3:4b-instruct` | 54/54 | 100.0% | 4.1 s |
+| `gemma3:4b` | 54/54 | 100.0% | 5.4 s |
+
+These results are a baseline for the current synthetic dataset in the author's
+self-hosted environment. They are not a general model benchmark, and the latency
+figures are not expected to transfer directly to different hardware or Ollama
+setups. The exact cases remain versioned in
+`scripts/evaluate_extractor_models.py`, so the comparison can be repeated after
+changing a model, prompt, or runtime configuration.
+
 ## Docker
 
 Build the image locally:
@@ -488,9 +505,11 @@ docker run --rm \
   local-agent
 ```
 
-The image does not currently bundle an extractor configuration. Mount the file
-read-only, as above, or provide another mounted path through
-`EXTRACTOR_CONFIG_PATH`.
+The image bundles the default extractor configuration at
+`/app/config/extractor.json`. The read-only bind mount above replaces that file
+with the configuration from the current checkout. Omit the mount and
+`EXTRACTOR_CONFIG_PATH` to use the bundled default, or point
+`EXTRACTOR_CONFIG_PATH` at another mounted file to override it.
 
 The container starts Uvicorn with the FastAPI application and listens on:
 
